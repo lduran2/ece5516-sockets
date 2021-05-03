@@ -1,11 +1,14 @@
 /* ./server.c
  * Runs a socket server.
  * By        : Leomar Duran <https://github.com/lduran2/>
- * When      : 2021-05-03t17:48
+ * When      : 2021-05-03t18:22
  * For       : ECE 5516
- * Version   : 1.1
+ * Version   : 1.2
  *
  * Changelog :
+ * 	v1.2 - 2021-05-03t18:22
+ * 		now reading from client through the socket
+ *
  * 	v1.1 - 2021-05-03t17:48
  * 		server listening and accepting clients
  * 		tested
@@ -44,13 +47,26 @@ int main(int argc, char **argv) {
 	int listenfd;
 	/* the socket connected */
 	int connectedfd;
+	/* the socket connected as a file */
+	FILE *connectedf;
+
+	/* character buffer representing line
+	 * to populate while reading */
+	char *line;
+	/* length of the line character buffer */
+	size_t len;
 
 	/* client properties */
 	struct {
 		/* properties of the address */
 		struct {
 			/* value and length */
-			struct sockaddr *val;
+			union {
+				/* as pointer to storage */
+				struct sockaddr_storage pstorage[1];
+				/* as pointer to socket address */ 
+				struct sockaddr psa[1];
+			} val;
 			socklen_t len;
 		} addr;
 		/* client name and port number */
@@ -138,15 +154,14 @@ int main(int argc, char **argv) {
 		argv[0], port
 	);
 
-	/* client address pointer and length */
-	client.addr.len = sizeof (struct sockaddr_storage);
-	client.addr.val = malloc(client.addr.len);
-
 	/* listen indefinitely */
 	for (; ; ) {
+		/* use all storage for client address */
+		client.addr.len = sizeof *client.addr.val.pstorage;
+
 		/* attempt to connect */
 		if (-1==(connectedfd = accept(listenfd,
-			client.addr.val, &client.addr.len)))
+			client.addr.val.psa, &client.addr.len)))
 		{
 			fprintf(stderr,
 				"[%s] error connecting: %s\n",
@@ -154,13 +169,16 @@ int main(int argc, char **argv) {
 			);
 		} /* if (-1==accept(listenfd, ...)) */
 		else {
+			/* convert the descriptor to a file */
+			connectedf = fdopen(connectedfd, "r");
+
 			/* announce connection, and client if possible */
-			switch (getnameinfo(client.addr.val, client.addr.len,
+			switch (getnameinfo(client.addr.val.psa, client.addr.len,
 				client.name, CBUF_SIZE, client.port, CBUF_SIZE, 0))
 			{
 				case 0:
 					/* case named client */
-					fprintf(stderr,
+					fprintf(stdout,
 						"[%s] accepted connection from %s:%s\n",
 						argv[0],
 						client.name, client.port
@@ -168,7 +186,7 @@ int main(int argc, char **argv) {
 				break; /* case 0 */
 				default:
 					/* case unnamed client */
-					fprintf(stderr,
+					fprintf(stdout,
 						"[%s] accepted connection from unnamed client: %s\n",
 						argv[0], strerror(errno)
 					);
@@ -177,10 +195,14 @@ int main(int argc, char **argv) {
 				client.name, CBUF_SIZE, client.port, CBUF_SIZE, 0))
 			   */
 
-			/* [todo] read from the socket */
+			/* read from the socket */
+			for (ssize_t nread; (0 <= (nread = getline(&line, &len, connectedf))); )
+			{
+				fprintf(stdout, "[%s] read: %s", argv[0], line);
+			}
 
 			/* close the connection */
-			fprintf(stderr, "[%s] connection closed\n", argv[0]);
+			fprintf(stdout, "[%s] connection closed\n", argv[0]);
 			close(connectedfd);
 		} /* (-1==accept(listenfd, ...)) else */
 	} /* for (; ; ) */
