@@ -1,17 +1,22 @@
 /* ./server.c
  * Runs a socket server.
  * By        : Leomar Duran <https://github.com/lduran2/>
- * When      : 2021-05-03t14:06
+ * When      : 2021-05-03t17:48
  * For       : ECE 5516
- * Version   : 1.0
+ * Version   : 1.1
  *
  * Changelog :
+ * 	v1.1 - 2021-05-03t17:48
+ * 		server listening and accepting clients
+ * 		tested
+ * 		[todo] reading from socket
+ *
  * 	v1.0 - 2021-05-03t14:06
  * 		created and tested socket listen
  */
 
-#include <stdlib.h>	/* for exit, EXIT_SUCCESS */
-#include <stdio.h>	/* for fprintf, stderr */
+#include <stdlib.h>	/* for exit, EXIT_SUCCESS, malloc */
+#include <stdio.h>	/* for fprintf, stderr, stdout */
 #include <errno.h>	/* for errno */
 #include <string.h>	/* for strerror */
 #include <netdb.h>	/* for getaddrinfo */
@@ -27,6 +32,9 @@ string_t const DEFAULT_PORT = "8080";
 /** limit on outstanding connections in socket's listen queue */
 enum { BACKLOG = 020 };
 
+/** character buffer size */
+enum { CBUF_SIZE = 0100 };
+
 int main(int argc, char **argv) {
 	/* constants for initializing */
 	enum { SOCK_TCP = SOCK_STREAM };
@@ -34,6 +42,21 @@ int main(int argc, char **argv) {
 
 	/* socket ready for listening */
 	int listenfd;
+	/* the socket connected */
+	int connectedfd;
+
+	/* client properties */
+	struct {
+		/* properties of the address */
+		struct {
+			/* value and length */
+			struct sockaddr *val;
+			socklen_t len;
+		} addr;
+		/* client name and port number */
+		char name[CBUF_SIZE];
+		char port[CBUF_SIZE];
+	} client;
 
 	/* criteria for selecting socket addresses */
 	struct addrinfo hints;
@@ -63,7 +86,7 @@ int main(int argc, char **argv) {
 			argv[0], gai_strerror(status), strerror(errno)
 		);
 		return EXIT_FAILURE;
-	}
+	} /* if (getaddrinfo(NULL, port, ... )) */
 
 	/* search for the first available address */
 	for (struct addrinfo *pcnd = results; /* candidate address */
@@ -93,23 +116,75 @@ int main(int argc, char **argv) {
 	freeaddrinfo(results);
 
 	/* if no address found */
-	if (paddr == NULL) {
+	if (!paddr) {
 		fprintf(stderr,
 			"[%s] failed to find address to bind to socket\n",
 			argv[0]
 		);
 		exit(EXIT_FAILURE);
-	} /* if (paddr == NULL) */
+	} /* if (!paddr) */
 	/* otherwise try listening */
 	else if (listen(listenfd, BACKLOG) < 0) {
 		fprintf(stderr,
-			"[%s] error listening to socket %d\n",
-			argv[0], listenfd);
+			"[%s] error listening\n",
+			argv[0]
+		);
 		close(listenfd);
 		exit(EXIT_FAILURE);
 	} /* else if (listen(listenfd, BACKLOG) < 0) */
 
-	return port[0];
+	fprintf(stderr,
+		"[%s] listening to port %s . . .\n",
+		argv[0], port
+	);
 
+	/* client address pointer and length */
+	client.addr.len = sizeof (struct sockaddr_storage);
+	client.addr.val = malloc(client.addr.len);
+
+	/* listen indefinitely */
+	for (; ; ) {
+		/* attempt to connect */
+		if (-1==(connectedfd = accept(listenfd,
+			client.addr.val, &client.addr.len)))
+		{
+			fprintf(stderr,
+				"[%s] error connecting: %s\n",
+				argv[0], strerror(errno)
+			);
+		} /* if (-1==accept(listenfd, ...)) */
+		else {
+			/* announce connection, and client if possible */
+			switch (getnameinfo(client.addr.val, client.addr.len,
+				client.name, CBUF_SIZE, client.port, CBUF_SIZE, 0))
+			{
+				case 0:
+					/* case named client */
+					fprintf(stderr,
+						"[%s] accepted connection from %s:%s\n",
+						argv[0],
+						client.name, client.port
+					);
+				break; /* case 0 */
+				default:
+					/* case unnamed client */
+					fprintf(stderr,
+						"[%s] accepted connection from unnamed client: %s\n",
+						argv[0], strerror(errno)
+					);
+				break; /* default */
+			} /* switch (getnameinfo(client.addr.val, client.addr.len,
+				client.name, CBUF_SIZE, client.port, CBUF_SIZE, 0))
+			   */
+
+			/* [todo] read from the socket */
+
+			/* close the connection */
+			fprintf(stderr, "[%s] connection closed\n", argv[0]);
+			close(connectedfd);
+		} /* (-1==accept(listenfd, ...)) else */
+	} /* for (; ; ) */
+
+	fprintf(stdout, "Done.");
 	exit(EXIT_SUCCESS);
 }
