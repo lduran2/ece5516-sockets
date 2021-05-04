@@ -1,11 +1,15 @@
 /* ./server.c
  * Runs a socket server.
  * By        : Leomar Duran <https://github.com/lduran2/>
- * When      : 2021-05-03t20:04
+ * When      : 2021-05-03t21:08
  * For       : ECE 5516
- * Version   : 1.3
+ * Version   : 1.4
  *
  * Changelog :
+ * 	v1.4 - 2021-05-03t21:08
+ * 		server was not responding to client, now fixed
+ * 		fixed port default switch from (argc > 2)
+ *
  * 	v1.3 - 2021-05-03t20:04
  * 		now returning input to client as upper case
  *
@@ -53,7 +57,7 @@ int main(int argc, char **argv) {
 	/* the socket connected */
 	int connectedfd;
 	/* the socket connected as a file */
-	FILE *connectedf;
+	FILE *fconnected;
 
 	/* character buffer representing line
 	 * to populate while reading */
@@ -92,13 +96,15 @@ int main(int argc, char **argv) {
 	string_t port;
 
 	/* set port if given, otherwise use default */
-	port = (argc > 2) ? argv[1] : DEFAULT_PORT;
+	port = (argc > 1) ? argv[1] : DEFAULT_PORT;
 
 	/* NULL out the citeria */
 	memset(&hints, 0, sizeof hints);
 	/* initialize to TCP and IPv4 */
 	hints.ai_socktype = SOCK_TCP;
        	hints.ai_family = AF_IPv4;
+
+	fprintf(stderr, "[%s] looking up to port %s . . .\n", argv[0], port);
 
 	/* select the addresses */
 	if ((status = getaddrinfo(NULL, port, &hints, &results))) {
@@ -174,12 +180,14 @@ int main(int argc, char **argv) {
 			);
 		} /* if (-1==accept(listenfd, ...)) */
 		else {
-			/* convert the descriptor to a file */
-			connectedf = fdopen(connectedfd, "r");
+			/* convert the socket descriptor to a file */
+			fconnected = fdopen(connectedfd, "r");
 
 			/* announce connection, and client if possible */
-			switch (getnameinfo(client.addr.val.psa, client.addr.len,
-				client.name, CBUF_SIZE, client.port, CBUF_SIZE, 0))
+			switch (getnameinfo(
+				client.addr.val.psa, client.addr.len,
+				client.name, CBUF_SIZE,
+				client.port, CBUF_SIZE, 0))
 			{
 				case 0:
 					/* case named client */
@@ -196,26 +204,37 @@ int main(int argc, char **argv) {
 						argv[0], strerror(errno)
 					);
 				break; /* default */
-			} /* switch (getnameinfo(client.addr.val, client.addr.len,
-				client.name, CBUF_SIZE, client.port, CBUF_SIZE, 0))
+			} /* switch (getnameinfo(
+				client.addr.val, client.addr.len,
+				client.name, CBUF_SIZE,
+				client.port, CBUF_SIZE, 0))
 			   */
 
 			/* read from the socket */
-			for (ssize_t nread; (0 <= (nread = getline(&line, &len, connectedf))); )
+			for (ssize_t nread; (0 <= (nread =
+				getline(&line, &len, fconnected)
+			)); )
 			{
-				fprintf(stdout, "[%s] read: ", argv[0]);
-				for (size_t k = 0; line[k]; ++k) {
-					fputc(toupper(line[k]), stdout);
-				}
-			}
+				/* report the reading */
+				fprintf(stdout,
+					"[%s] read: %s",
+					argv[0], line
+				);
+				/* uppercase each character in place */
+				for (size_t k = 0; (line[k]); ++k) {
+					line[k] = toupper(line[k]);
+				} /* for (; (line[k]); ) */
+				/* send uppercase to the socket */
+				write(connectedfd, line, nread);
+			} /* for (; (0 <= getline(&line, &len, fconnected)); ) */
 
 			/* close the connection */
 			fprintf(stdout, "[%s] connection closed\n", argv[0]);
-			fclose(connectedf);
+			fclose(fconnected);
 			close(connectedfd);
 		} /* (-1==accept(listenfd, ...)) else */
 	} /* for (; ; ) */
 
-	fprintf(stdout, "Done.");
+	fprintf(stderr, "Done.\n");
 	exit(EXIT_SUCCESS);
 }
