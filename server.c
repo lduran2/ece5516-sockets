@@ -1,11 +1,14 @@
 /* ./server.c
  * Runs a socket server.
  * By        : Leomar Duran <https://github.com/lduran2/>
- * When      : 2021-05-03t18:22
+ * When      : 2021-05-03t20:04
  * For       : ECE 5516
- * Version   : 1.2
+ * Version   : 1.3
  *
  * Changelog :
+ * 	v1.3 - 2021-05-03t20:04
+ * 		now returning input to client as upper case
+ *
  * 	v1.2 - 2021-05-03t18:22
  * 		now reading from client through the socket
  *
@@ -18,13 +21,15 @@
  * 		created and tested socket listen
  */
 
-#include <stdlib.h>	/* for exit, EXIT_SUCCESS, malloc */
-#include <stdio.h>	/* for fprintf, stderr, stdout */
+#include <stdlib.h>	/* for exit, EXIT_SUCCESS */
+#include <stdio.h>	/* for fprintf, stderr, stdout,
+			   fdopen, getline, fclose */
 #include <errno.h>	/* for errno */
 #include <string.h>	/* for strerror */
 #include <netdb.h>	/* for getaddrinfo */
 #include <sys/socket.h>	/* for addrinfo */
 #include <unistd.h>	/* for close */
+#include <ctype.h>	/* for toupper */
 
 /** string type */
 typedef const char *string_t;
@@ -198,11 +203,15 @@ int main(int argc, char **argv) {
 			/* read from the socket */
 			for (ssize_t nread; (0 <= (nread = getline(&line, &len, connectedf))); )
 			{
-				fprintf(stdout, "[%s] read: %s", argv[0], line);
+				fprintf(stdout, "[%s] read: ", argv[0]);
+				for (size_t k = 0; line[k]; ++k) {
+					fputc(toupper(line[k]), stdout);
+				}
 			}
 
 			/* close the connection */
 			fprintf(stdout, "[%s] connection closed\n", argv[0]);
+			fclose(connectedf);
 			close(connectedfd);
 		} /* (-1==accept(listenfd, ...)) else */
 	} /* for (; ; ) */
