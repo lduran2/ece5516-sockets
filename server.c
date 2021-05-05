@@ -1,11 +1,14 @@
 /* ./server.c
  * Runs a socket server.
  * By        : Leomar Duran <https://github.com/lduran2/>
- * When      : 2021-05-04t23:43
+ * When      : 2021-05-05t02:57
  * For       : ECE 5516
- * Version   : 1.4.1
+ * Version   : 1.4.2
  *
  * Changelog :
+ * 	v1.4.2 - 2021-05-05t02:57
+ * 		abstracted the service out from main
+ *
  * 	v1.4.1 - 2021-05-03t21:08
  * 		common socket operations abstracted to sockcommon.c
  * 		refactored to use sockcommon.c
@@ -44,37 +47,14 @@ enum { BACKLOG = 020 };
 /** character buffer size */
 enum { CBUF_SIZE = 0100 };
 
+/** accepts the next client from the connected socket and serves it */
+void serve_next_client_from(int connectedfd,
+	int (*ifunc)(int), FILE *fout, string_t server_name
+);
+
 int main(int argc, char **argv) {
-	/* character buffer representing line
-	 * to populate while reading */
-	char *line = NULL;
-	/* length of the line character buffer */
-	size_t len = 0;
-
-	/* client properties */
-	struct {
-		/* properties of the address */
-		struct {
-			/* value and length */
-			union {
-				/* as pointer to storage */
-				struct sockaddr_storage pstorage[1];
-				/* as pointer to socket address */ 
-				struct sockaddr psa[1];
-			} val;
-			socklen_t len;
-		} addr;
-		/* client name and port number */
-		char name[CBUF_SIZE];
-		char port[CBUF_SIZE];
-	} client;
-
 	/* the socket connected */
 	int connectedfd;
-	/* the socket to an accepted client */
-	int acceptedfd;
-	/* file descriptor to the accepted client socket */
-	FILE *faccepted;
  	/* linked list of selected candidate addresses */
 	struct addrinfo *results;
 	/* port to listen to if given, otherwise default */
@@ -107,72 +87,10 @@ int main(int argc, char **argv) {
 
 	/* listen indefinitely */
 	for (; ; ) {
-		/* use all storage for client address */
-		client.addr.len = sizeof *client.addr.val.pstorage;
-
-		/* attempt to accept a client */
-		if (-1==(acceptedfd = accept(connectedfd,
-			client.addr.val.psa, &client.addr.len)))
-		{
-			fprintf(stderr,
-				"[%s] error accepting a client: %s\n",
-				argv[0], strerror(errno)
-			);
-		} /* if (-1==accept(connectedfd, ...)) */
-		else {
-			/* convert the socket descriptor to a file */
-			faccepted = fdopen(acceptedfd, "r");
-
-			/* announce accepted connection, and client if possible */
-			switch (getnameinfo(
-				client.addr.val.psa, client.addr.len,
-				client.name, CBUF_SIZE,
-				client.port, CBUF_SIZE, 0))
-			{
-				case 0:
-					/* case named client */
-					fprintf(stdout,
-						"[%s] accepted connection from %s:%s\n",
-						argv[0],
-						client.name, client.port
-					);
-				break; /* case 0 */
-				default:
-					/* case unnamed client */
-					fprintf(stdout,
-						"[%s] accepted connection from unnamed client: %s\n",
-						argv[0], strerror(errno)
-					);
-				break; /* default */
-			} /* switch (getnameinfo(
-				client.addr.val, client.addr.len,
-				client.name, CBUF_SIZE,
-				client.port, CBUF_SIZE, 0))
-			   */
-
-			/* read from the socket */
-			for (ssize_t nread; (0 <= (nread =
-				getline(&line, &len, faccepted)
-			)); )
-			{
-				/* report the reading */
-				fprintf(stdout,
-					"[%s] read: %s",
-					argv[0], line
-				);
-				/* uppercase each character in place */
-				for (size_t k = 0; (line[k]); ++k) {
-					line[k] = toupper(line[k]);
-				} /* for (; (line[k]); ) */
-				/* send uppercase to the socket */
-				write(acceptedfd, line, nread);
-			} /* for (; (0 <= getline(&line, &len, faccepted)); ) */
-
-			/* close the connection */
-			fprintf(stdout, "[%s] connection closed\n", argv[0]);
-			fclose(faccepted);
-			close(acceptedfd);
-		} /* (-1==accept(connectedfd, ...)) else */
+		/* accept and serve the next client */
+		serve_next_client_from(connectedfd,
+			toupper, stdout, argv[0]
+		);
 	} /* for (; ; ) */
 
 	/* close the connected socket */
@@ -181,3 +99,116 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "Done.\n");
 	exit(EXIT_SUCCESS);
 }
+
+/**
+ * Accepts the next client from the connected socket and serves it.
+ * @params
+ *	connectedfd : int = socket to get the client from
+ *	ifunc : int (*)(int) = transformation on characters
+ *	fout : FILE * = stream to report to
+ *	server_name : string_t = name of the server for
+ *		logging and reporting
+ */
+void serve_next_client_from(int connectedfd,
+	int (*ifunc)(int), FILE *fout, string_t server_name)
+{
+	/* character buffer representing line
+	 * to populate while reading */
+	char *line = NULL;
+	/* length of the line character buffer */
+	size_t len = 0;
+
+	/* the socket to an accepted client */
+	int acceptedfd;
+	/* file descriptor to the accepted client socket */
+	FILE *faccepted;
+
+	/* client properties */
+	struct {
+		/* properties of the address */
+		struct {
+			/* value and length */
+			union {
+				/* as pointer to storage */
+				struct sockaddr_storage pstorage[1];
+				/* as pointer to socket address */ 
+				struct sockaddr psa[1];
+			} val;
+			socklen_t len;
+		} addr;
+		/* client name and port number */
+		char name[CBUF_SIZE];
+		char port[CBUF_SIZE];
+	} client;
+
+	/* use all storage for client address */
+	client.addr.len = sizeof *client.addr.val.pstorage;
+
+	/* attempt to accept a client */
+	if (-1==(acceptedfd = accept(connectedfd,
+		client.addr.val.psa, &client.addr.len)))
+	{
+		fprintf(stderr,
+			"[%s] error accepting a client: %s\n",
+			server_name, strerror(errno)
+		);
+		/* fail on error */
+		return;
+	} /* if (-1==accept(connectedfd, ...)) */
+
+	/* announce accepted connection, and client if possible */
+	switch (getnameinfo(
+		client.addr.val.psa, client.addr.len,
+		client.name, CBUF_SIZE,
+		client.port, CBUF_SIZE, 0))
+	{
+		case 0:
+			/* case named client */
+			fprintf(fout,
+				"[%s] accepted connection from %s:%s\n",
+				server_name,
+				client.name, client.port
+			);
+		break; /* case 0 */
+		default:
+			/* case unnamed client */
+			fprintf(fout,
+				"[%s] accepted connection from unnamed client: %s\n",
+				server_name, strerror(errno)
+			);
+		break; /* default */
+	} /* switch (getnameinfo(
+		client.addr.val, client.addr.len,
+		client.name, CBUF_SIZE,
+		client.port, CBUF_SIZE, 0))
+	   */
+
+	/* convert the socket descriptor to a file */
+	faccepted = fdopen(acceptedfd, "r");
+
+	/* read from the socket */
+	for (ssize_t nread; (0 <= (nread =
+		getline(&line, &len, faccepted)
+	)); )
+	{
+		/* report the reading */
+		fprintf(fout,
+			"[%s] read: %s",
+			server_name, line
+		);
+		/* uppercase each character in place */
+		for (size_t k = 0; (line[k]); ++k) {
+			line[k] = ifunc(line[k]);
+		} /* for (; (line[k]); ) */
+		/* send uppercase to the socket */
+		write(acceptedfd, line, nread);
+	} /* for (; (0 <= getline(&line, &len, faccepted)); ) */
+
+	/* close the connection */
+	fprintf(fout, "[%s] connection closed\n", server_name);
+	fclose(faccepted);
+	close(acceptedfd);
+} /* void serve_next_client_from(int connectedfd,
+	int (*ifunc)(int), FILE *fout, string_t server_name)
+   */
+
