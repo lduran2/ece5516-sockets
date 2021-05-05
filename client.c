@@ -1,11 +1,15 @@
 /* ./client.c
  * Runs a socket clienT.
  * By        : Leomar Duran <https://github.com/lduran2/>
- * When      : 2021-05-03t23:51
+ * When      : 2021-05-05t00:15
  * For       : ECE 5516
- * Version   : 1.0
+ * Version   : 1.0.1
  *
  * Changelog :
+ * 	v1.0.1 - 2021-05-05t00:15
+ * 		common socket operations abstracted to sockcommon.c
+ * 		refactored to use sockcommon.c
+ *
  * 	v1.0 - 2021-05-03t23:51
  * 		adapted to be client
  *
@@ -18,103 +22,35 @@
 			   fdopen, getline, fclose */
 #include <errno.h>	/* for errno */
 #include <string.h>	/* for strerror */
-#include <netdb.h>	/* for getaddrinfo */
-#include <sys/socket.h>	/* for addrinfo */
 #include <unistd.h>	/* for close */
-
-/** string type */
-typedef const char *string_t;
-
-/** port chosen if no port given */
-string_t const DEFAULT_PORT = "8080";
-
-/** character buffer size */
-enum { CBUF_SIZE = 0100 };
+#include "sockcommon.h"	/* for common socket operations */
 
 int main(int argc, char **argv) {
-	/* constants for initializing */
-	enum { SOCK_TCP = SOCK_STREAM };
-	enum { AF_IPv4 = AF_INET };
+	/* character buffer representing line
+	 * to populate while reading */
+	char *line = NULL;
+	/* length of the line character buffer */
+	size_t len = 0;
 
 	/* the socket connected */
 	int connectedfd;
-	/* the socket connected as a file */
+	/* file descriptor to the connected socket */
 	FILE *fconnected;
-
-	/* character buffer representing line
-	 * to populate while reading */
-	char *line;
-	/* length of the line character buffer */
-	size_t len;
-
-	/* criteria for selecting socket addresses */
-	struct addrinfo hints;
-	/* resulting addresses */
+ 	/* linked list of selected candidate addresses */
 	struct addrinfo *results;
-	/* error status of finding addresses */
-	int status;
-	/* available address */
-	struct addrinfo *paddr = NULL;
-
-	/* port to listen to */
+	/* port to listen to if given, otherwise default */
 	string_t port;
 
-	/* set port if given, otherwise use default */
-	port = (argc > 1) ? argv[1] : DEFAULT_PORT;
-
-	/* NULL out the citeria */
-	memset(&hints, 0, sizeof hints);
-	/* initialize to TCP and IPv4 */
-	hints.ai_socktype = SOCK_TCP;
-       	hints.ai_family = AF_IPv4;
-
-	fprintf(stderr, "[%s] looking up to port %s . . .\n", argv[0], port);
-
-	/* select the addresses */
-	if ((status = getaddrinfo(NULL, port, &hints, &results))) {
-		fprintf(stderr,
-			"[%s] unable to find TCP address to IPv4: %s: %s\n",
-			argv[0], gai_strerror(status), strerror(errno)
-		);
-		return EXIT_FAILURE;
-	} /* if (getaddrinfo(NULL, port, ... )) */
-
-	/* search for the first available address */
-	for (struct addrinfo *pcnd = results; /* candidate address */
-		(pcnd && !paddr); pcnd = pcnd->ai_next)
-	{
-		/* communications domain to establish */
-		int domain = pcnd->ai_family;
-		/* try creating the socket */
-		if ((connectedfd = socket(domain,
-			pcnd->ai_socktype, pcnd->ai_protocol)) < 0)
-		{
-			fprintf(stderr,
-				"[%s] error creating socket at (%p): %s\n",
-				argv[0], pcnd, strerror(errno)
-			);
-		} /* if (socket(domain, ...) < 0) */
-		/* try assigning address to socket descriptor connectedfd */
-		else if (0==connect(connectedfd, pcnd->ai_addr, pcnd->ai_addrlen))
-		{
-			paddr = pcnd;
-		} /* (socket(domain, ...) < 0) else
-		     if (0==bind(connectedfd, ...))
-		   */
-	} /* for (; (pcnd && !paddr); */
-
+	/* choose the port */
+	port = get_port(argc, argv);
+	/* select the addresses to that port */
+	results = select_addresses(port, argv[0]);
+	/* connect socket to the first available address */
+	connectedfd = find_connection(results, connect, "connect", argv[0]);
 	/* free linked list of results */
 	freeaddrinfo(results);
 
-	/* if no address found */
-	if (!paddr) {
-		fprintf(stderr,
-			"[%s] failed to find address to connect to socket\n",
-			argv[0]
-		);
-		exit(EXIT_FAILURE);
-	} /* if (!paddr) */
-
+	/* report the successful connection */
 	fprintf(stdout,
 		"[%s] connected to port %s . . .\n",
 		argv[0], port
@@ -127,7 +63,7 @@ int main(int argc, char **argv) {
 	fprintf(stderr, "Escape character is 'C-d'.\n>>> ");
 	fflush(stderr);
 
-	/* read from standard input and loop until no input */
+	/* read from standard input until no input */
 	for (ssize_t nread; (0 <= (nread = getline(&line, &len, stdin))); )
 	{
 		/* write request to the server */

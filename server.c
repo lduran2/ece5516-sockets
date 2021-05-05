@@ -1,11 +1,15 @@
 /* ./server.c
  * Runs a socket server.
  * By        : Leomar Duran <https://github.com/lduran2/>
- * When      : 2021-05-03t21:08
+ * When      : 2021-05-04t23:43
  * For       : ECE 5516
- * Version   : 1.4
+ * Version   : 1.4.1
  *
  * Changelog :
+ * 	v1.4.1 - 2021-05-03t21:08
+ * 		common socket operations abstracted to sockcommon.c
+ * 		refactored to use sockcommon.c
+ *
  * 	v1.4 - 2021-05-03t21:08
  * 		server was not responding to client, now fixed
  * 		fixed port default switch from (argc > 2)
@@ -30,16 +34,9 @@
 			   fdopen, getline, fclose */
 #include <errno.h>	/* for errno */
 #include <string.h>	/* for strerror */
-#include <netdb.h>	/* for getaddrinfo */
-#include <sys/socket.h>	/* for addrinfo */
 #include <unistd.h>	/* for close */
 #include <ctype.h>	/* for toupper */
-
-/** string type */
-typedef const char *string_t;
-
-/** port chosen if no port given */
-string_t const DEFAULT_PORT = "8080";
+#include "sockcommon.h"	/* for common socket operations */
 
 /** limit on outstanding connections in socket's listen queue */
 enum { BACKLOG = 020 };
@@ -48,22 +45,11 @@ enum { BACKLOG = 020 };
 enum { CBUF_SIZE = 0100 };
 
 int main(int argc, char **argv) {
-	/* constants for initializing */
-	enum { SOCK_TCP = SOCK_STREAM };
-	enum { AF_IPv4 = AF_INET };
-
-	/* socket ready for listening */
-	int listenfd;
-	/* the socket connected */
-	int connectedfd;
-	/* the socket connected as a file */
-	FILE *fconnected;
-
 	/* character buffer representing line
 	 * to populate while reading */
-	char *line;
+	char *line = NULL;
 	/* length of the line character buffer */
-	size_t len;
+	size_t len = 0;
 
 	/* client properties */
 	struct {
@@ -83,83 +69,37 @@ int main(int argc, char **argv) {
 		char port[CBUF_SIZE];
 	} client;
 
-	/* criteria for selecting socket addresses */
-	struct addrinfo hints;
-	/* resulting addresses */
+	/* the socket connected */
+	int connectedfd;
+	/* the socket to an accepted client */
+	int acceptedfd;
+	/* file descriptor to the accepted client socket */
+	FILE *faccepted;
+ 	/* linked list of selected candidate addresses */
 	struct addrinfo *results;
-	/* error status of finding addresses */
-	int status;
-	/* available address */
-	struct addrinfo *paddr = NULL;
-
-	/* port to listen to */
+	/* port to listen to if given, otherwise default */
 	string_t port;
 
-	/* set port if given, otherwise use default */
-	port = (argc > 1) ? argv[1] : DEFAULT_PORT;
-
-	/* NULL out the citeria */
-	memset(&hints, 0, sizeof hints);
-	/* initialize to TCP and IPv4 */
-	hints.ai_socktype = SOCK_TCP;
-       	hints.ai_family = AF_IPv4;
-
-	fprintf(stderr, "[%s] looking up to port %s . . .\n", argv[0], port);
-
-	/* select the addresses */
-	if ((status = getaddrinfo(NULL, port, &hints, &results))) {
-		fprintf(stderr,
-			"[%s] unable to find TCP address to IPv4: %s: %s\n",
-			argv[0], gai_strerror(status), strerror(errno)
-		);
-		return EXIT_FAILURE;
-	} /* if (getaddrinfo(NULL, port, ... )) */
-
-	/* search for the first available address */
-	for (struct addrinfo *pcnd = results; /* candidate address */
-		(pcnd && !paddr); pcnd = pcnd->ai_next)
-	{
-		/* communications domain to establish */
-		int domain = pcnd->ai_family;
-		/* try creating the socket */
-		if ((listenfd = socket(domain,
-			pcnd->ai_socktype, pcnd->ai_protocol)) < 0)
-		{
-			fprintf(stderr,
-				"[%s] error creating socket at (%p): %s\n",
-				argv[0], pcnd, strerror(errno)
-			);
-		} /* if (socket(domain, ...) < 0) */
-		/* try assigning address to socket descriptor listenfd */
-		else if (0==bind(listenfd, pcnd->ai_addr, pcnd->ai_addrlen))
-		{
-			paddr = pcnd;
-		} /* (socket(domain, ...) < 0) else
-		     if (0==bind(listenfd, ...))
-		   */
-	} /* for (; (pcnd && !paddr); */
-
+	/* choose the port */
+	port = get_port(argc, argv);
+	/* select the addresses to that port */
+	results = select_addresses(port, argv[0]);
+	/* bind socket to the first available address */
+	connectedfd = find_connection(results, bind, "bind", argv[0]);
 	/* free linked list of results */
 	freeaddrinfo(results);
 
-	/* if no address found */
-	if (!paddr) {
-		fprintf(stderr,
-			"[%s] failed to find address to bind to socket\n",
-			argv[0]
-		);
-		exit(EXIT_FAILURE);
-	} /* if (!paddr) */
-	/* otherwise try listening */
-	else if (listen(listenfd, BACKLOG) < 0) {
+	/* try listening through connected socket */
+	if (listen(connectedfd, BACKLOG) < 0) {
 		fprintf(stderr,
 			"[%s] error listening\n",
 			argv[0]
 		);
-		close(listenfd);
+		close(connectedfd);
 		exit(EXIT_FAILURE);
-	} /* else if (listen(listenfd, BACKLOG) < 0) */
+	} /* if (listen(connectedfd, BACKLOG) < 0) */
 
+	/* report the successful connection */
 	fprintf(stderr,
 		"[%s] listening to port %s . . .\n",
 		argv[0], port
@@ -170,20 +110,20 @@ int main(int argc, char **argv) {
 		/* use all storage for client address */
 		client.addr.len = sizeof *client.addr.val.pstorage;
 
-		/* attempt to connect */
-		if (-1==(connectedfd = accept(listenfd,
+		/* attempt to accept a client */
+		if (-1==(acceptedfd = accept(connectedfd,
 			client.addr.val.psa, &client.addr.len)))
 		{
 			fprintf(stderr,
-				"[%s] error connecting: %s\n",
+				"[%s] error accepting a client: %s\n",
 				argv[0], strerror(errno)
 			);
-		} /* if (-1==accept(listenfd, ...)) */
+		} /* if (-1==accept(connectedfd, ...)) */
 		else {
 			/* convert the socket descriptor to a file */
-			fconnected = fdopen(connectedfd, "r");
+			faccepted = fdopen(acceptedfd, "r");
 
-			/* announce connection, and client if possible */
+			/* announce accepted connection, and client if possible */
 			switch (getnameinfo(
 				client.addr.val.psa, client.addr.len,
 				client.name, CBUF_SIZE,
@@ -212,7 +152,7 @@ int main(int argc, char **argv) {
 
 			/* read from the socket */
 			for (ssize_t nread; (0 <= (nread =
-				getline(&line, &len, fconnected)
+				getline(&line, &len, faccepted)
 			)); )
 			{
 				/* report the reading */
@@ -225,15 +165,18 @@ int main(int argc, char **argv) {
 					line[k] = toupper(line[k]);
 				} /* for (; (line[k]); ) */
 				/* send uppercase to the socket */
-				write(connectedfd, line, nread);
-			} /* for (; (0 <= getline(&line, &len, fconnected)); ) */
+				write(acceptedfd, line, nread);
+			} /* for (; (0 <= getline(&line, &len, faccepted)); ) */
 
 			/* close the connection */
 			fprintf(stdout, "[%s] connection closed\n", argv[0]);
-			fclose(fconnected);
-			close(connectedfd);
-		} /* (-1==accept(listenfd, ...)) else */
+			fclose(faccepted);
+			close(acceptedfd);
+		} /* (-1==accept(connectedfd, ...)) else */
 	} /* for (; ; ) */
+
+	/* close the connected socket */
+	close(connectedfd);
 
 	fprintf(stderr, "Done.\n");
 	exit(EXIT_SUCCESS);

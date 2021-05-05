@@ -13,10 +13,10 @@ client: client.out
 	@# cascade
 
 # executables
-server.out: server.o
+server.out: server.o sockcommon.o
 	$(COMPILE_OUT)
 
-client.out: client.o
+client.out: client.o sockcommon.o
 	$(COMPILE_OUT)
 
 # objects
@@ -24,6 +24,9 @@ server.o: server.c
 	$(COMPILE_O)
 
 client.o: client.c
+	$(COMPILE_O)
+
+sockcommon.o: sockcommon.c
 	$(COMPILE_O)
 
 # cleaning
